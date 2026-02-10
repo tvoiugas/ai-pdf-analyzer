@@ -26,5 +26,10 @@ jobs:
           pip install pytest pytest-asyncio pytest-cov httpx
 
       - name: Run tests with coverage report
+      - name: Run tests with coverage report
+        env:
+          DATABASE_URL: postgresql://user:pass@localhost:5432/dbname
+          REDIS_URL: redis://localhost:6379/0
+          OLLAMA_BASE_URL: http://localhost:11434
         run: |
           pytest -v --cov=app --cov-report=term-missing
