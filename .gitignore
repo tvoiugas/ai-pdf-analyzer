@@ -1,0 +1,20 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.env/
+env/
+
+# Environment
+.env
+
+# Data & DB
+postgres_data/
+data/*
+!data/.gitkeep
+
+# Project specific
+.pytest_cache/
+.coverage
+htmlcov/
+*.log
