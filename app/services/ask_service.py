@@ -1,4 +1,4 @@
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import text
 from langchain_ollama import OllamaEmbeddings, ChatOllama
 from app.core.logger import logger
@@ -21,9 +21,9 @@ llm = ChatOllama(
     base_url=OLLAMA_URL
 )
 
-async def get_answer(db: Session, question: str, user_id: str, document_id: Optional[int] = None):
+async def get_answer(db: AsyncSession, question: str, user_id: int, document_id: Optional[int] = None):
     try:
-        question_vector = embeddings_model.embed_query(question)
+        question_vector = await embeddings_model.aembed_query(question)
         vector_str = f"[{','.join(map(str, question_vector))}]"
 
         query = """
@@ -40,7 +40,7 @@ async def get_answer(db: Session, question: str, user_id: str, document_id: Opti
 
         query += "ORDER BY embedding <=> :vector LIMIT 15"
 
-        result = db.execute(text(query), params)
+        result = await db.execute(text(query), params)
         chunks = [row[0] for row in result]
 
         if not chunks:
@@ -68,7 +68,7 @@ async def get_answer(db: Session, question: str, user_id: str, document_id: Opti
             ### ОТВЕТ:
         """
 
-        response = llm.invoke(prompt)
+        response = await llm.ainvoke(prompt)
         return response.content
     except Exception as e:
         logger.error(f"Error in ask_service: {e}", exc_info=True)
