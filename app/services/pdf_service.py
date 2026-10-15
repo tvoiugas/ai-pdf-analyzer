@@ -21,7 +21,7 @@ embeddings_model = OllamaEmbeddings(
 )
 
 @celery_app.task(name="app.services.pdf_service.process_pdf_task")
-def process_pdf_task(file_path: str, filename: str, user_id: str = "guest"):
+def process_pdf_task(file_path: str, filename: str, user_id: int):
     db = SessionLocal()
     try:
         logger.info(f"Processing PDF: {filename} for user: {user_id}")
