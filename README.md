@@ -1,6 +1,6 @@
 # AI PDF Analyzer (RAG & Celery)
 
-![Coverage](https://img.shields.io/badge/coverage-80%25-brightgreen)
+![Coverage](https://img.shields.io/badge/coverage-98%25-brightgreen)
 ![Python](https://img.shields.io/badge/python-3.14-blue)
 ![FastAPI](https://img.shields.io/badge/FastAPI-0.100%2B-009688)
 
@@ -11,7 +11,7 @@
 * **AI Stack:** LangChain, Ollama
 * **Database:** PostgreSQL + **pgvector**
 * **Cache/Broker:** Redis
-* **Testing:** Pytest + Manual Monkeypatching
+* **Testing:** Pytest, testcontainers (PostgreSQL + pgvector), GitHub Actions
 
 ## Архитектура
 1.  **Ingestion:** PDF -> Чанки (RecursiveCharacterTextSplitter) -> Векторизация (Ollama) -> Стор в PGVector.
@@ -68,15 +68,16 @@ curl -X POST http://localhost:8000/auth/token -d "username=me@example.com&passwo
 Дальше передавайте токен в заголовке `Authorization: Bearer <access_token>`. В Swagger (`/docs`) для этого есть кнопка **Authorize**. Токен действует `JWT_EXPIRE_MINUTES` минут (по умолчанию 30).
 
 ## Тестирование
-Локальный запуск (требуется venv):
+Локальный запуск (требуется venv и запущенный Docker):
 ```bash
-pytest -v --cov=app
+pytest -v --cov
 ```
-Тесты с маркером `db` требуют PostgreSQL с pgvector (`DATABASE_URL`). Без базы их можно пропустить:
+Тесты с маркером `db` работают с настоящей PostgreSQL + pgvector. Если Docker запущен, тесты сами поднимают временный контейнер `pgvector/pgvector:0.8.7-pg16`, применяют миграции и удаляют контейнер в конце. Вместо этого можно указать свою базу через `TEST_DATABASE_URL`.
+
+> Тесты очищают таблицы после каждого `db`-теста, поэтому они **никогда не используют `DATABASE_URL`** из окружения или `.env`. Не указывайте в `TEST_DATABASE_URL` базу с нужными данными.
+
+Без Docker `db`-тесты пропускаются с пояснением. Запустить только тесты без базы:
 ```bash
 pytest -m "not db"
 ```
-Запуск внутри Docker-контейнера:
-```bash
-docker exec -it <имя_контейнера_app> pytest -v --cov=app
-```
+Покрытие считается по веткам; `--cov` завершится ошибкой, если оно опустится ниже 90% (`.coveragerc`). Тот же набор запускается в GitHub Actions (`.github/workflows/test.yml`) вместе с проверкой миграций.

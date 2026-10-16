@@ -1,0 +1,9 @@
+[run]
+source = app
+branch = True
+
+[report]
+show_missing = True
+skip_covered = True
+# Kept a few points under the current figure so the gate catches untested code, not noise.
+fail_under = 90

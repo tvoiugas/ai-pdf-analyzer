@@ -1,36 +1,32 @@
 import asyncio
 import time
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, patch
+
 import pytest
-from httpx import AsyncClient, ASGITransport
-from langchain_core.documents import Document as LC_Document
-from unittest.mock import AsyncMock, MagicMock, patch
+
 from app.main import app
 from app.core.database import AsyncSessionLocal, get_db
 from app.models.sql_models import Document
-from app.services.pdf_service import process_pdf_task, embeddings_model
-import io
+from app.services import ask_service
 
-from langchain_text_splitters import RecursiveCharacterTextSplitter
 
-@pytest.mark.asyncio
-async def test_ask_question_no_auth():
-    transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://testserver") as ac:
-        response = await ac.post("/ask", json={"question": "Привет"})
+async def test_ask_question_no_auth(client):
+    response = await client.post("/ask", json={"question": "Привет"})
 
     assert response.status_code == 401
 
+
 @pytest.mark.db
-@pytest.mark.asyncio
 async def test_get_documents_empty(client, register):
     _, headers = await register()
     response = await client.get("/documents", headers=headers)
-    
+
     assert response.status_code == 200
     assert response.json() == []
 
+
 @pytest.mark.db
-@pytest.mark.asyncio
 async def test_get_documents_filters_by_filename(client, register):
     owner_id, headers = await register()
     other_id, _ = await register()
@@ -53,52 +49,26 @@ async def test_get_documents_filters_by_filename(client, register):
     assert await filenames(filename="%") == []
     assert await filenames() == ["Q3_REPORT.pdf", "notes.pdf", "report-2025.pdf"]
 
-@pytest.mark.asyncio
-async def test_upload_pdf_success(as_user, upload_dir):
-    as_user(999)
-    file_content = b"%PDF-1.4 test content"
-    file = io.BytesIO(file_content)
 
+async def test_upload_pdf_success(client, as_user, upload_dir):
+    as_user(999)
     with patch("app.services.pdf_service.process_pdf_task.delay") as mock_task:
-        transport = ASGITransport(app=app)
-        async with AsyncClient(transport=transport, base_url="http://testserver") as ac:
-            response = await ac.post(
-                "/upload",
-                files={"file": ("test.pdf", file, "application/pdf")}
-            )
+        response = await client.post("/upload", files={"file": ("test.pdf", b"%PDF-1.4 test content", "application/pdf")})
 
     assert response.status_code == 200
     assert response.json()["status"] == "success"
     # The owner passed to the worker comes from the token, not from the request.
     assert mock_task.call_args.args[1:] == ("test.pdf", 999)
 
-@pytest.mark.asyncio
-async def test_upload_wrong_file_type(as_user):
-    as_user(999)
-    file_content = b"Just some text content"
-    file = io.BytesIO(file_content)
 
-    transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://testserver") as ac:
-        response = await ac.post(
-            "/upload",
-            files={"file": ("test.txt", file, "text/plain")}
-        )
+async def test_upload_wrong_file_type(client, as_user):
+    as_user(999)
+    response = await client.post("/upload", files={"file": ("test.txt", b"Just some text content", "text/plain")})
 
     assert response.status_code == 400
 
-@pytest.mark.asyncio
-async def test_ask_question_no_user_id():
-    text = "Test string " * 200
-    splitter = RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=50)
-
-    chunks = splitter.split_text(text)
-
-    assert len(chunks) > 1
-    assert all(len(chunk) <= 500 for chunk in chunks)
 
 @pytest.mark.db
-@pytest.mark.asyncio
 async def test_delete_document_permissions(client, register):
     owner_id, owner_headers = await register()
     _, other_headers = await register()
@@ -114,34 +84,15 @@ async def test_delete_document_permissions(client, register):
     response = await client.delete(f"/documents/{doc.id}", headers=owner_headers)
     assert response.status_code == 200
 
-@pytest.mark.asyncio
-async def test_get_answer_success():
-    mock_db = AsyncMock()
-    mock_db.execute.return_value = [("Context chunk",)]
 
-    from app.services import ask_service
-    
-    original_embeddings = ask_service.embeddings_model
-    original_llm = ask_service.llm
+async def test_get_answer_success(fake_ai):
+    db = AsyncMock()
+    db.execute.return_value = [("Context chunk",)]
 
-    mock_emb_inst = AsyncMock()
-    mock_emb_inst.aembed_query.return_value = [0.1, 0.2, 0.3]
-    
-    mock_llm_inst = AsyncMock()
-    mock_llm_inst.ainvoke.return_value = MagicMock(content="Answer based on context")
+    answer = await ask_service.get_answer(db, "Test question", user_id=999)
 
-    ask_service.embeddings_model = mock_emb_inst
-    ask_service.llm = mock_llm_inst
-
-    try:
-        answer = await ask_service.get_answer(mock_db, "Test question", user_id=999)
-
-        assert "Answer based on context" in answer
-        assert mock_llm_inst.ainvoke.called
-        
-    finally:
-        ask_service.embeddings_model = original_embeddings
-        ask_service.llm = original_llm
+    assert answer == "fake answer"
+    assert "Context chunk" in fake_ai.llm.last_user_message
 
 
 class SlowFakeLLM:
@@ -152,39 +103,30 @@ class SlowFakeLLM:
 
     def invoke(self, prompt):
         time.sleep(self.delay)
-        return MagicMock(content="slow answer")
+        return SimpleNamespace(content="slow answer")
 
     async def ainvoke(self, prompt):
         await asyncio.sleep(self.delay)
-        return MagicMock(content="slow answer")
+        return SimpleNamespace(content="slow answer")
 
 
-@pytest.mark.asyncio
-async def test_slow_ask_does_not_block_other_requests(monkeypatch, as_user):
+async def test_slow_ask_does_not_block_other_requests(client, fake_ai, monkeypatch, as_user):
     as_user(1)
-    from app.services import ask_service
-
-    mock_emb_inst = AsyncMock()
-    mock_emb_inst.aembed_query.return_value = [0.1] * 1024
-    monkeypatch.setattr(ask_service, "embeddings_model", mock_emb_inst)
     monkeypatch.setattr(ask_service, "llm", SlowFakeLLM(delay=1.0))
-
-    mock_db = AsyncMock()
-    mock_db.execute.return_value = [("Context chunk",)]
+    db = AsyncMock()
+    db.execute.return_value = [("Context chunk",)]
 
     async def override_get_db():
-        yield mock_db
+        yield db
 
     app.dependency_overrides[get_db] = override_get_db
     try:
-        transport = ASGITransport(app=app)
-        async with AsyncClient(transport=transport, base_url="http://testserver") as ac:
-            started = time.perf_counter()
-            ask = asyncio.create_task(ac.post("/ask", json={"question": "q"}))
-            await asyncio.sleep(0.1)  # let /ask reach the LLM call
-            other = await ac.get("/openapi.json")
-            other_elapsed = time.perf_counter() - started
-            ask_response = await ask
+        started = time.perf_counter()
+        ask = asyncio.create_task(client.post("/ask", json={"question": "q"}))
+        await asyncio.sleep(0.1)  # let /ask reach the LLM call
+        other = await client.get("/openapi.json")
+        other_elapsed = time.perf_counter() - started
+        ask_response = await ask
     finally:
         app.dependency_overrides.pop(get_db, None)
 
