@@ -8,6 +8,7 @@ os.environ.setdefault("JWT_SECRET_KEY", "test-secret-key-at-least-32-characters-
 import pytest
 from httpx import AsyncClient, ASGITransport
 
+from app import main as main_module
 from app.main import app
 from app.core.security import get_current_user
 
@@ -19,6 +20,13 @@ async def client():
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://testserver") as ac:
         yield ac
+
+
+@pytest.fixture
+def upload_dir(tmp_path, monkeypatch):
+    """Save uploads into a per-test temporary folder instead of /app/data."""
+    monkeypatch.setattr(main_module, "SAVE_PATH", str(tmp_path))
+    return tmp_path
 
 
 @pytest.fixture

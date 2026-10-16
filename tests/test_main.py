@@ -54,7 +54,7 @@ async def test_get_documents_filters_by_filename(client, register):
     assert await filenames() == ["Q3_REPORT.pdf", "notes.pdf", "report-2025.pdf"]
 
 @pytest.mark.asyncio
-async def test_upload_pdf_success(as_user):
+async def test_upload_pdf_success(as_user, upload_dir):
     as_user(999)
     file_content = b"%PDF-1.4 test content"
     file = io.BytesIO(file_content)
