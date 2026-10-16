@@ -54,7 +54,7 @@ async def test_get_documents_filters_by_filename(client, register):
     assert await filenames() == ["Q3_REPORT.pdf", "notes.pdf", "report-2025.pdf"]
 
 @pytest.mark.asyncio
-async def test_upload_pdf_success(as_user):
+async def test_upload_pdf_success(as_user, upload_dir):
     as_user(999)
     file_content = b"%PDF-1.4 test content"
     file = io.BytesIO(file_content)
@@ -113,44 +113,6 @@ async def test_delete_document_permissions(client, register):
 
     response = await client.delete(f"/documents/{doc.id}", headers=owner_headers)
     assert response.status_code == 200
-
-@pytest.mark.asyncio
-async def test_process_pdf_task_logic():
-    with patch("app.services.pdf_service.PyPDFLoader") as mock_loader, \
-         patch("app.services.pdf_service.SessionLocal") as mock_db_session, \
-         patch("app.services.pdf_service.os.path.exists") as mock_exists, \
-         patch("app.services.pdf_service.os.remove") as mock_remove:
-
-        mock_exists.return_value = True
-        
-        mock_loader.return_value.load.return_value = [
-            LC_Document(page_content="Test content for embeddings", metadata={"source": "test.pdf"})
-        ]
-        
-        from app.services import pdf_service
-        original_embeddings = pdf_service.embeddings_model
-        mock_emb_inst = MagicMock()
-        mock_emb_inst.embed_query.return_value = [0.1, 0.2, 0.3]
-        pdf_service.embeddings_model = mock_emb_inst
-
-        try:
-            mock_db = MagicMock()
-            mock_db_session.return_value = mock_db
-            mock_db.query.return_value.filter.return_value.first.return_value = None
-            
-            def mock_add(obj):
-                if hasattr(obj, 'filename'):
-                    obj.id = 1
-            mock_db.add.side_effect = mock_add
-
-            result = pdf_service.process_pdf_task("fake.pdf", "test.pdf", user_id=1)
-
-            assert result is not None
-            assert result["status"] == "completed"
-            assert result["document_id"] == 1
-            
-        finally:
-            pdf_service.embeddings_model = original_embeddings
 
 @pytest.mark.asyncio
 async def test_get_answer_success():

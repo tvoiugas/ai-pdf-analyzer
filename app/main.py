@@ -4,6 +4,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 import anyio
 import os
+from uuid import uuid4
 
 from app.models.sql_models import Document, User
 from app.core.database import get_db
@@ -29,28 +30,62 @@ SAVE_PATH = "/app/data"
 os.makedirs(SAVE_PATH, exist_ok=True)
 
 UPLOAD_CHUNK_SIZE = 1024 * 1024
+MAX_UPLOAD_BYTES = int(os.getenv("MAX_UPLOAD_MB", "50")) * 1024 * 1024
+MAX_FILENAME_LENGTH = 255
+# PDF readers accept the header anywhere in the first 1024 bytes.
+PDF_HEADER = b"%PDF-"
+PDF_HEADER_WINDOW = 1024
+
+
+def display_filename(raw_name: Optional[str]) -> str:
+    """Reduce the client's filename to a label for the DB and responses. It is never used to build a path."""
+    # Keep only the last path component, whichever separator the client used.
+    name = (raw_name or "").replace("\\", "/").rsplit("/", 1)[-1]
+    name = "".join(ch for ch in name if ch.isprintable()).strip()
+    # Trim from the front so the extension survives.
+    return name[-MAX_FILENAME_LENGTH:]
+
+
+async def save_upload(file: UploadFile, path: str) -> None:
+    first_chunk = await file.read(UPLOAD_CHUNK_SIZE)
+    if PDF_HEADER not in first_chunk[:PDF_HEADER_WINDOW]:
+        raise HTTPException(status_code=400, detail="File is not a valid PDF.")
+
+    size = 0
+    chunk = first_chunk
+    # "x" mode refuses to overwrite, so two uploads can never share a file.
+    async with await anyio.open_file(path, "xb") as buffer:
+        while chunk:
+            size += len(chunk)
+            if size > MAX_UPLOAD_BYTES:
+                raise HTTPException(
+                    status_code=413,
+                    detail=f"File is larger than {MAX_UPLOAD_BYTES // (1024 * 1024)} MB.",
+                )
+            await buffer.write(chunk)
+            chunk = await file.read(UPLOAD_CHUNK_SIZE)
+
 
 @app.post("/upload")
 async def upload_pdf(file: UploadFile = File(...), current_user: User = Depends(get_current_user)):
-    if not file.filename.endswith(".pdf"):
+    filename = display_filename(file.filename)
+    if not filename.lower().endswith(".pdf"):
         raise HTTPException(status_code=400, detail="Only PDF files are supported.")
-    
-    filename = f"{current_user.id}_{file.filename}"
-    full_path = os.path.join(SAVE_PATH, filename)
 
-    async with await anyio.open_file(full_path, "wb") as buffer:
-        while chunk := await file.read(UPLOAD_CHUNK_SIZE):
-            await buffer.write(chunk)
-
-    if os.path.exists(full_path):
-        logger.info(f"File saved successfully at {full_path}")
+    # Generated server-side: nothing the client sends ends up in the path.
+    full_path = os.path.join(SAVE_PATH, f"{uuid4().hex}.pdf")
+    try:
+        await save_upload(file, full_path)
+        logger.info(f"Saved upload {filename!r} for user {current_user.id} at {full_path}")
         # delay() is a blocking round-trip to the Redis broker.
-        task = await run_in_threadpool(process_pdf_task.delay, full_path, file.filename, current_user.id)
+        await run_in_threadpool(process_pdf_task.delay, full_path, filename, current_user.id)
+    except BaseException:
+        # Covers rejected content, client disconnects and a broker failure: no file is left without a task.
+        if os.path.exists(full_path):
+            os.remove(full_path)
+        raise
 
-        return {"status": "success", "filename": file.filename, "message": "File processing in background."}
-    else:
-        logger.error(f"File was not saved: {full_path}")
-        return {"error": "Failed to save file"}
+    return {"status": "success", "filename": filename, "message": "File processing in background."}
 
 @app.post("/ask")
 async def ask_question(
