@@ -149,10 +149,10 @@ async def test_users_only_see_and_query_their_own_documents(client, register, mo
 
     # Pointing /ask at someone else's document finds nothing rather than leaking its text.
     response = await client.post("/ask", json={"question": "q", "document_id": alice_doc.id}, headers=bob)
-    assert response.json()["answer"] == "No relevant information found in the documents."
+    assert response.json()["answer"] == "The documents do not contain this information."
     assert not mock_llm_inst.ainvoke.called
 
     await client.post("/ask", json={"question": "q"}, headers=bob)
-    prompt = mock_llm_inst.ainvoke.call_args.args[0]
+    prompt = mock_llm_inst.ainvoke.call_args.args[0][1].content
     assert "bob secret" in prompt
     assert "alice secret" not in prompt

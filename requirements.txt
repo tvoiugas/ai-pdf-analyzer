@@ -2,7 +2,7 @@ fastapi
 uvicorn
 sqlalchemy[asyncio]
 psycopg[binary]
-pgvector
+pgvector>=0.5.1
 langchain
 langchain-community
 langchain-ollama

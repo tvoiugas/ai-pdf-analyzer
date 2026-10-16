@@ -2,7 +2,8 @@ version: '3.8'
 
 services:
   postgres:
-    image: pgvector/pgvector:pg16
+    # Pinned: iterative HNSW scans need pgvector >= 0.8.0, and the bare pg16 tag floats.
+    image: pgvector/pgvector:0.8.7-pg16
     container_name: vector_db
     ports:
       - "5432:5432"
