@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Text, ForeignKey, DateTime, Index, func
+from sqlalchemy import Column, Integer, String, Text, ForeignKey, DateTime, Index, UniqueConstraint, func
 from sqlalchemy.orm import relationship
 from pgvector.sqlalchemy import Vector
 from app.core.database import Base
@@ -7,7 +7,7 @@ from app.core.database import Base
 class User(Base):
     __tablename__ = "users"
 
-    id = Column(Integer, primary_key=True, index=True)
+    id = Column(Integer, primary_key=True)
     email = Column(String, nullable=False, unique=True, index=True)
     hashed_password = Column(String, nullable=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
@@ -16,19 +16,25 @@ class User(Base):
 class Document(Base):
     __tablename__ = "documents"
 
-    id = Column(Integer, primary_key=True, index=True)
+    id = Column(Integer, primary_key=True)
     filename = Column(String, nullable=False)
     user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
     upload_date = Column(DateTime(timezone=True), server_default=func.now())
 
     chunks = relationship("DocumentChunk", back_populates="document", cascade="all, delete-orphan")
 
+    __table_args__ = (
+        # The worker skips a filename the user already has; this makes that hold even when two
+        # uploads of the same name are processed at the same moment.
+        UniqueConstraint("user_id", "filename", name="uq_documents_user_id_filename"),
+    )
+
 
 class DocumentChunk(Base):
     __tablename__ = "document_chunks"
 
-    id = Column(Integer, primary_key=True, index=True)
-    document_id = Column(Integer, ForeignKey("documents.id", ondelete="CASCADE"), nullable=False)
+    id = Column(Integer, primary_key=True)
+    document_id = Column(Integer, ForeignKey("documents.id", ondelete="CASCADE"), nullable=False, index=True)
     content = Column(Text, nullable=False)
     embedding = Column(Vector(1024))
 
