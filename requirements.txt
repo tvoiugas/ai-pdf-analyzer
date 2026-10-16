@@ -11,6 +11,9 @@ celery
 redis
 python-dotenv
 python-multipart
+pyjwt
+pwdlib[argon2]
+pydantic[email]
 alembic
 pytest
 pytest-asyncio
