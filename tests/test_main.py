@@ -29,6 +29,30 @@ async def test_get_documents_empty(client, register):
     assert response.status_code == 200
     assert response.json() == []
 
+@pytest.mark.db
+@pytest.mark.asyncio
+async def test_get_documents_filters_by_filename(client, register):
+    owner_id, headers = await register()
+    other_id, _ = await register()
+    async with AsyncSessionLocal() as db:
+        db.add_all([
+            Document(filename="report-2025.pdf", user_id=owner_id),
+            Document(filename="Q3_REPORT.pdf", user_id=owner_id),
+            Document(filename="notes.pdf", user_id=owner_id),
+            Document(filename="report-of-someone-else.pdf", user_id=other_id),
+        ])
+        await db.commit()
+
+    async def filenames(**params):
+        response = await client.get("/documents", params=params, headers=headers)
+        assert response.status_code == 200
+        return sorted(d["filename"] for d in response.json())
+
+    assert await filenames(filename="report") == ["Q3_REPORT.pdf", "report-2025.pdf"]
+    assert await filenames(filename="_") == ["Q3_REPORT.pdf"]
+    assert await filenames(filename="%") == []
+    assert await filenames() == ["Q3_REPORT.pdf", "notes.pdf", "report-2025.pdf"]
+
 @pytest.mark.asyncio
 async def test_upload_pdf_success(as_user):
     as_user(999)

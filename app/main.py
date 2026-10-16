@@ -72,11 +72,12 @@ async def list_documents(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    query = select(Document)
+    query = select(Document).where(Document.user_id == current_user.id)
     if filename:
-        query = query.where(Document.filename.ilike(f"%{filename}%"))
+        # autoescape makes "%" and "_" in the search text match literally instead of acting as wildcards.
+        query = query.where(Document.filename.icontains(filename, autoescape=True))
 
-    result = await db.execute(select(Document).where(Document.user_id == current_user.id))
+    result = await db.execute(query)
     docs = result.scalars().all()
     return [{"id": d.id, "filename": d.filename, "upload_date": d.upload_date} for d in docs]
 
