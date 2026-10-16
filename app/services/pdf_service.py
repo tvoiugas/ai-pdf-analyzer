@@ -20,6 +20,10 @@ embeddings_model = OllamaEmbeddings(
     client_kwargs={"timeout": 300.0}
 )
 
+# embed_documents() sends its whole input as one Ollama request, so a large PDF is embedded in bounded
+# batches: each request stays well inside the client timeout, and progress shows up in the logs.
+EMBED_BATCH_SIZE = int(os.getenv("EMBED_BATCH_SIZE", "64"))
+
 @celery_app.task(name="app.services.pdf_service.process_pdf_task")
 def process_pdf_task(file_path: str, filename: str, user_id: int):
     db = SessionLocal()
@@ -47,29 +51,34 @@ def process_pdf_task(file_path: str, filename: str, user_id: int):
             chunk_overlap=50,
         )
         chunks = text_splitter.split_documents(pages)
+        texts = [chunk.page_content for chunk in chunks]
 
-        db_doc = Document(
-            filename=filename,
-            user_id=user_id
-        )
+        if not texts:
+            # e.g. a scanned PDF with no text layer: there is nothing to search, so no document is created.
+            logger.warning(f"No extractable text in {filename}; nothing stored.")
+            return {"document_id": None, "status": "no_text"}
+
+        # Embed everything before touching the database, so a failure part-way leaves no trace
+        # and no transaction sits open during the slow Ollama calls.
+        vectors = []
+        for start in range(0, len(texts), EMBED_BATCH_SIZE):
+            batch = texts[start:start + EMBED_BATCH_SIZE]
+            batch_vectors = embeddings_model.embed_documents(batch)
+            # A short reply from the embedder must fail loudly, not pair text with the wrong vector.
+            if len(batch_vectors) != len(batch):
+                raise ValueError(f"Expected {len(batch)} embeddings, got {len(batch_vectors)}")
+            vectors.extend(batch_vectors)
+            logger.info(f"Embedded {len(vectors)}/{len(texts)} chunks of {filename}")
+
+        # The document and its chunks are committed together: it only becomes visible once complete.
+        db_doc = Document(filename=filename, user_id=user_id)
+        db_doc.chunks = [
+            DocumentChunk(content=text, embedding=vector)
+            for text, vector in zip(texts, vectors, strict=True)
+        ]
         db.add(db_doc)
         db.commit()
-        db.refresh(db_doc)
-
-        logger.info(f"Created Document ID: {db_doc.id}. Generating embeddings.")
-
-        for chunk in chunks:
-            vector = embeddings_model.embed_query(chunk.page_content)
-
-            db_chunk = DocumentChunk(
-                document_id=db_doc.id,
-                content=chunk.page_content,
-                embedding=vector
-            )
-            db.add(db_chunk)
-        
-        db.commit()
-        logger.info(f"Successfully ingested {filename}")
+        logger.info(f"Successfully ingested {filename} as document {db_doc.id} with {len(texts)} chunks")
 
         return {"document_id": db_doc.id, "status": "completed"}
         
