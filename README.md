@@ -49,10 +49,26 @@ ollama pull mxbai-embed-large
 ollama pull llama3.1
 ```
 
+## Аутентификация
+Все эндпоинты документов требуют JWT-токен. Перед запуском задайте в `.env` переменную `JWT_SECRET_KEY` длиной не менее 32 символов:
+```bash
+python -c "import secrets; print(secrets.token_urlsafe(48))"
+```
+Регистрация и получение токена:
+```bash
+curl -X POST http://localhost:8000/auth/register -H "Content-Type: application/json" -d '{"email": "me@example.com", "password": "long-enough-password"}'
+curl -X POST http://localhost:8000/auth/token -d "username=me@example.com&password=long-enough-password"
+```
+Дальше передавайте токен в заголовке `Authorization: Bearer <access_token>`. В Swagger (`/docs`) для этого есть кнопка **Authorize**. Токен действует `JWT_EXPIRE_MINUTES` минут (по умолчанию 30).
+
 ## Тестирование
 Локальный запуск (требуется venv):
 ```bash
 pytest -v --cov=app
+```
+Тесты с маркером `db` требуют PostgreSQL с pgvector (`DATABASE_URL`). Без базы их можно пропустить:
+```bash
+pytest -m "not db"
 ```
 Запуск внутри Docker-контейнера:
 ```bash

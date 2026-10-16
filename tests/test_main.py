@@ -5,7 +5,8 @@ from httpx import AsyncClient, ASGITransport
 from langchain_core.documents import Document as LC_Document
 from unittest.mock import AsyncMock, MagicMock, patch
 from app.main import app
-from app.core.database import get_db
+from app.core.database import AsyncSessionLocal, get_db
+from app.models.sql_models import Document
 from app.services.pdf_service import process_pdf_task, embeddings_model
 import io
 
@@ -17,19 +18,20 @@ async def test_ask_question_no_auth():
     async with AsyncClient(transport=transport, base_url="http://testserver") as ac:
         response = await ac.post("/ask", json={"question": "Привет"})
 
-    assert response.status_code == 422
+    assert response.status_code == 401
 
+@pytest.mark.db
 @pytest.mark.asyncio
-async def test_get_documents_empty():
-    transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://testserver") as ac:
-        response = await ac.get("/documents", params={"user_id": "999"})
+async def test_get_documents_empty(client, register):
+    _, headers = await register()
+    response = await client.get("/documents", headers=headers)
     
     assert response.status_code == 200
     assert response.json() == []
 
 @pytest.mark.asyncio
-async def test_upload_pdf_success():
+async def test_upload_pdf_success(as_user):
+    as_user(999)
     file_content = b"%PDF-1.4 test content"
     file = io.BytesIO(file_content)
 
@@ -38,16 +40,17 @@ async def test_upload_pdf_success():
         async with AsyncClient(transport=transport, base_url="http://testserver") as ac:
             response = await ac.post(
                 "/upload",
-                params={"user_id": "999"},
                 files={"file": ("test.pdf", file, "application/pdf")}
             )
 
     assert response.status_code == 200
     assert response.json()["status"] == "success"
-    assert mock_task.called
+    # The owner passed to the worker comes from the token, not from the request.
+    assert mock_task.call_args.args[1:] == ("test.pdf", 999)
 
 @pytest.mark.asyncio
-async def test_upload_wrong_file_type():
+async def test_upload_wrong_file_type(as_user):
+    as_user(999)
     file_content = b"Just some text content"
     file = io.BytesIO(file_content)
 
@@ -55,7 +58,6 @@ async def test_upload_wrong_file_type():
     async with AsyncClient(transport=transport, base_url="http://testserver") as ac:
         response = await ac.post(
             "/upload",
-            params={"user_id": "999"},
             files={"file": ("test.txt", file, "text/plain")}
         )
 
@@ -71,13 +73,22 @@ async def test_ask_question_no_user_id():
     assert len(chunks) > 1
     assert all(len(chunk) <= 500 for chunk in chunks)
 
+@pytest.mark.db
 @pytest.mark.asyncio
-async def test_delete_document_permissions():
-    transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://testserver") as ac:
-        response = await ac.delete("/documents/30", params={"user_id": "999"})
-    
+async def test_delete_document_permissions(client, register):
+    owner_id, owner_headers = await register()
+    _, other_headers = await register()
+    async with AsyncSessionLocal() as db:
+        doc = Document(filename="owned.pdf", user_id=owner_id)
+        db.add(doc)
+        await db.commit()
+
+    # Another user gets the same 404 as for a missing id, so ids of others' documents aren't revealed.
+    response = await client.delete(f"/documents/{doc.id}", headers=other_headers)
     assert response.status_code == 404
+
+    response = await client.delete(f"/documents/{doc.id}", headers=owner_headers)
+    assert response.status_code == 200
 
 @pytest.mark.asyncio
 async def test_process_pdf_task_logic():
@@ -163,7 +174,8 @@ class SlowFakeLLM:
 
 
 @pytest.mark.asyncio
-async def test_slow_ask_does_not_block_other_requests(monkeypatch):
+async def test_slow_ask_does_not_block_other_requests(monkeypatch, as_user):
+    as_user(1)
     from app.services import ask_service
 
     mock_emb_inst = AsyncMock()
@@ -182,7 +194,7 @@ async def test_slow_ask_does_not_block_other_requests(monkeypatch):
         transport = ASGITransport(app=app)
         async with AsyncClient(transport=transport, base_url="http://testserver") as ac:
             started = time.perf_counter()
-            ask = asyncio.create_task(ac.post("/ask", json={"question": "q", "user_id": 1}))
+            ask = asyncio.create_task(ac.post("/ask", json={"question": "q"}))
             await asyncio.sleep(0.1)  # let /ask reach the LLM call
             other = await ac.get("/openapi.json")
             other_elapsed = time.perf_counter() - started
