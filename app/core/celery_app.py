@@ -8,13 +8,9 @@ celery_app = Celery(
     "worker",
     broker=os.getenv("REDIS_URL", "redis://localhost:6379/0"),
     backend=os.getenv("REDIS_URL", "redis://localhost:6379/0"),
-    include=["app.services.pdf_service", "app.services.ask_service"]
+    # ask_service defines no Celery tasks, so the worker has no reason to import it.
+    include=["app.services.pdf_service"]
 )
-
-celery_app.conf.task_routes = {
-    "app.services.pdf_service.pdf_task": "main-queue"
-    # "app.services.ask_service.get_answer": {"queue": "ask_tasks"},
-}
 
 celery_app.conf.update(
     broker_transport_options={

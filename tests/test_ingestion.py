@@ -163,3 +163,22 @@ def test_reupload_after_a_failure_is_processed(pdf_pages, real_user, monkeypatch
 
     assert result["status"] == "completed"
     assert document_count(real_user) == 1
+
+
+@pytest.mark.db
+def test_parallel_upload_of_the_same_file_is_stored_once(pdf_pages, real_user, monkeypatch):
+    class ParallelTaskFinishesFirst(FakeEmbedder):
+        """While this task embeds, a parallel task for the same file commits its document."""
+        def embed_documents(self, texts):
+            if not self.calls:
+                with SessionLocal() as other:
+                    other.add(Document(filename="same.pdf", user_id=real_user))
+                    other.commit()
+            return super().embed_documents(texts)
+
+    monkeypatch.setattr(pdf_service, "embeddings_model", ParallelTaskFinishesFirst())
+
+    result = pdf_service.process_pdf_task(pdf_pages(["chunk 0", "chunk 1"]), "same.pdf", user_id=real_user)
+
+    assert result["status"] == "already_exists" and result["document_id"] is not None
+    assert document_count(real_user) == 1

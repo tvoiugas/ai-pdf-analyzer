@@ -1,3 +1,4 @@
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from langchain_community.document_loaders import PyPDFLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
@@ -77,7 +78,19 @@ def process_pdf_task(file_path: str, filename: str, user_id: int):
             for text, vector in zip(texts, vectors, strict=True)
         ]
         db.add(db_doc)
-        db.commit()
+        try:
+            db.commit()
+        except IntegrityError as e:
+            # Another task stored the same filename for this user while this one was embedding.
+            if getattr(e.orig.diag, "constraint_name", None) != "uq_documents_user_id_filename":
+                raise
+            db.rollback()
+            existing_id = db.query(Document.id).filter(
+                Document.filename == filename,
+                Document.user_id == user_id
+            ).scalar()
+            logger.info(f"Document {filename} was stored by a parallel task for user {user_id}. Skipping.")
+            return {"document_id": existing_id, "status": "already_exists"}
         logger.info(f"Successfully ingested {filename} as document {db_doc.id} with {len(texts)} chunks")
 
         return {"document_id": db_doc.id, "status": "completed"}

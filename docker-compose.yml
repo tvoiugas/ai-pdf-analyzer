@@ -32,7 +32,8 @@ services:
       - ./data:/app/data
     env_file:
       - .env
-    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    # Only the API applies migrations, so the worker never races it on startup.
+    command: sh -c "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"
 
   worker:
     build: .
