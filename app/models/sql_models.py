@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Text, ForeignKey, DateTime, func
+from sqlalchemy import Column, Integer, String, Text, ForeignKey, DateTime, Index, func
 from sqlalchemy.orm import relationship
 from pgvector.sqlalchemy import Vector
 from app.core.database import Base
@@ -33,3 +33,16 @@ class DocumentChunk(Base):
     embedding = Column(Vector(1024))
 
     document = relationship("Document", back_populates="chunks")
+
+    __table_args__ = (
+        # vector_cosine_ops serves the cosine-distance operator (<=>) that retrieval orders by;
+        # an index built for another operator would be ignored by that query.
+        # m / ef_construction are pgvector's defaults, spelled out so they are a visible choice.
+        Index(
+            "ix_document_chunks_embedding_hnsw",
+            embedding,
+            postgresql_using="hnsw",
+            postgresql_with={"m": 16, "ef_construction": 64},
+            postgresql_ops={"embedding": "vector_cosine_ops"},
+        ),
+    )
