@@ -26,7 +26,10 @@ class QuestionRequest(BaseModel):
 app = FastAPI(title="AI Document Analyzer") 
 app.include_router(auth.router)
 
-SAVE_PATH = "/app/data"
+# The project's data/ folder (/app/data in the containers, where the API and the worker share it),
+# unless UPLOAD_DIR says otherwise. Never a fixed absolute path: creating /app fails for a normal user.
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+SAVE_PATH = os.getenv("UPLOAD_DIR") or os.path.join(PROJECT_ROOT, "data")
 os.makedirs(SAVE_PATH, exist_ok=True)
 
 UPLOAD_CHUNK_SIZE = 1024 * 1024
